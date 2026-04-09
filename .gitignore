@@ -64,3 +64,5 @@ superset/*.db
 
 # Node (if any)
 node_modules/
+
+prompt.txt
