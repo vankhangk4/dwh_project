@@ -126,12 +126,12 @@ PYEOF
 ### Option 2: Full API startup test
 
 ```bash
-# Start API (foreground)
-export JWT_SECRET_KEY='TestSecretKeyThatIsAtLeast32CharactersLong!'
-export CONN_STR='Driver={ODBC Driver 17 for SQL Server};Server=localhost,1433;Database=DWH_RetailTech;UID=sa;Pwd=YourStrong@Passw0rd'
-export ENV=development
-
-python -m api.main
+# Start API (foreground) — MUST set JWT_SECRET_KEY before running
+JWT_SECRET_KEY='TestSecretKeyThatIsAtLeast32CharactersLong!' \
+CONN_STR='Driver={ODBC Driver 17 for SQL Server};Server=localhost,1433;Database=DWH_RetailTech;UID=sa;Pwd=YourStrong@Passw0rd' \
+SUPERSET_PASSWORD='admin' \
+CORS_ALLOWED_ORIGINS='http://localhost:3000,http://localhost:5173' \
+.venv/bin/python -m api.main
 
 # In another terminal, test endpoints:
 # Health check

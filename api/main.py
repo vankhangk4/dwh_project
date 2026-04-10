@@ -45,7 +45,7 @@ from api.auth import (
     refresh_access_token,
 )
 from api.config import get_config
-from api.database import close_db, init_db
+from api.database import close_db, get_db, init_db
 from api.middleware import (
     AdminUser,
     AuthenticatedUser,
@@ -324,7 +324,7 @@ async def root() -> dict[str, Any]:
 )
 async def login(
     request: LoginRequest,
-    db: Connection,
+    db: Connection = Depends(get_db),
 ) -> LoginResponse:
     """
     Authenticate user and return JWT access token.
@@ -451,7 +451,7 @@ async def refresh_token(
 )
 async def get_me(
     current_user: CurrentUser,
-    db: Connection,
+    db: Connection = Depends(get_db),
 ) -> UserInfo:
     """
     Get current authenticated user information.
