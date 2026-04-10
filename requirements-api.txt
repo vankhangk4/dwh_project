@@ -1,0 +1,14 @@
+# Phase 12: FastAPI Auth Gateway — Python Dependencies
+# Install: python -m venv .venv && source .venv/bin/activate && pip install -r requirements-api.txt
+
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.5.0
+pyodbc>=5.0.1
+sqlalchemy>=2.0.25
+pyjwt>=2.8.0
+bcrypt>=4.1.2
+requests>=2.31.0
+python-dotenv>=1.0.0
+apscheduler>=3.10.4
+python-multipart>=0.0.6

@@ -1,0 +1,175 @@
+🔷 PHASE 0: Project Scaffolding
+
+  - PROJECT_ROOT/setup.py — pyproject.toml với dependencies (pandas, pyodbc, openpyxl, fastapi, uvicorn, pyjwt, passlib[bcrypt],
+  python-dotenv, schedule)
+  - docker-compose.yml — Services: sqlserver, superset, etl-scheduler, api (FastAPI)
+  - .env.example — Template env vars (JWT_SECRET, CONN_STR, SMTP_*, SUPERSET_*, SLACK_*)
+  - README.md — Hướng dẫn chạy, cấu trúc thư mục
+  - requirements.txt
+
+  ---
+  🔷 PHASE 1: SQL Schema — Tenant Core (sql/schema/01_create_tenants.sql)
+
+  - Bảng Tenants (TenantID PK, TenantName, FilePath, IsActive, CreatedAt)
+  - Bảng AppUsers (UserID PK, Username UNIQUE, PasswordHash bcrypt, TenantID FK nullable, Role CHECK('admin'/'viewer'), IsActive,
+  CreatedAt)
+  - Insert seed: STORE_HN, STORE_HCM
+
+  ---
+  🔷 PHASE 2: SQL Schema — Dimensions Shared (sql/schema/02_create_dimensions.sql)
+
+  - DimDate — Shared, pre-populated 2015→2030 (DateKey INT yyyyMMdd, FullDate, Year, Month, Day, Quarter, DayOfWeek, IsHoliday)
+  - DimProduct — Shared, SCD Type 2 (ProductKey PK, ProductCode, ProductName, Brand, CategoryName, UnitCostPrice, UnitListPrice,
+  IsActive, EffectiveDate, ExpirationDate, IsCurrent)
+  - DimSupplier — Shared (SupplierKey PK, SupplierCode, SupplierName, ContactName, Phone, Email, City, Country, IsActive)
+
+  ---
+  🔷 PHASE 3: SQL Schema — Dimensions Tenant-Specific (sql/schema/03_create_dimensions_tenant.sql)
+
+  - DimStore — Có TenantID (StoreKey PK, TenantID, StoreCode, StoreName, Address, City, District, Phone, ManagerName, OpenDate,
+  IsActive)
+  - DimCustomer — Có TenantID, SCD Type 2 (CustomerKey PK, TenantID, CustomerCode, FullName, Gender, City, CustomerType, LoyaltyPoint,
+  MemberSince, IsActive, EffectiveDate, ExpirationDate, IsCurrent)
+  - DimEmployee — Có TenantID (EmployeeKey PK, TenantID, EmployeeCode, FullName, Gender, DateOfBirth, Position, Department, HireDate,
+  Phone, Email, IsActive)
+
+  ---
+  🔷 PHASE 4: SQL Schema — Facts (sql/schema/04_create_facts.sql)
+
+  - FactSales — Grain: 1 dòng = 1 sản phẩm/hóa đơn. Có TenantID. Columns: TenantID, DateKey, ProductKey, CustomerKey, StoreKey,
+  EmployeeKey, InvoiceNumber, Quantity, UnitPrice, DiscountAmount, GrossSalesAmount, NetSalesAmount, CostAmount, GrossProfitAmount,
+  PaymentMethod, SalesChannel, ReturnFlag, LoadDatetime
+  - FactInventory — Grain: 1 sản phẩm/cửa hàng/ngày. Có TenantID. Columns: TenantID, DateKey, ProductKey, StoreKey, OpeningQty,
+  ReceivedQty, SoldQty, AdjustedQty, ClosingQty, StockValue, ReorderLevel, LoadDatetime
+  - FactPurchase — Grain: 1 dòng nhập hàng. Có TenantID. Columns: TenantID, DateKey, ProductKey, SupplierKey, StoreKey,
+  PurchaseOrderNumber, Quantity, UnitCost, TotalCost, PaymentStatus, LoadDatetime
+
+  ---
+  🔷 PHASE 5: SQL Schema — Staging Layer (sql/schema/05_create_staging.sql)
+
+  - STG_SalesRaw — (Có TenantID) — 1 row per product per invoice
+  - STG_InventoryRaw — (Có TenantID) — 1 row per product per store per day
+  - STG_ProductRaw — (Shared) — Danh mục sản phẩm
+  - STG_CustomerRaw — (Có TenantID)
+  - STG_EmployeeRaw — (Có TenantID)
+  - STG_PurchaseRaw — (Có TenantID)
+  - ETL_Watermark — (Có TenantID) — SourceName, TenantID, WatermarkValue, LastRunStatus, LastRunDatetime, RowsExtracted, Notes
+  - STG_ErrorLog — (Có TenantID) — TenantID, SourceTable, ErrorType, ErrorMessage, RawData, LoadDatetime
+
+  ---
+  🔷 PHASE 6: SQL Schema — Data Mart Layer (sql/schema/06_create_datamart.sql)
+                                                                              
+  - DM_SalesSummary — (Có TenantID) — SummaryKey, TenantID, DateKey, StoreKey, CategoryName, TotalRevenue, TotalProfit, TotalOrders,
+  TotalQty, LastRefreshed                                                                                                              
+  - DM_InventoryAlert — (Có TenantID) — AlertKey, TenantID, ProductKey, StoreKey, CurrentQty, ReorderLevel, DaysOfStock, AlertLevel,
+  LastRefreshed                                                                                                                        
+  - DM_CustomerRFM — (Có TenantID) — RFMKey, TenantID, CustomerKey, RecencyDays, FrequencyOrders, MonetaryAmount, RFMScore, Segment,
+  LastRefreshed
+  - DM_EmployeePerformance — (Có TenantID) — PerfKey, TenantID, DateKey, EmployeeKey, TotalRevenue, TotalOrders, TotalQty,
+  AvgBasketValue, LastRefreshed
+  - DM_PurchaseSummary — (Có TenantID) — SummaryKey, TenantID, DateKey, SupplierKey, CategoryName, TotalPurchaseCost, TotalOrders,
+  TotalQty, LastRefreshed
+
+  ---
+  🔷 PHASE 7: SQL Stored Procedures (sql/sp/)
+
+  - usp_Load_DimDate.sql — Populate DimDate (2015-2030)
+  - usp_Load_DimProduct.sql — SCD Type 2 Shared
+  - usp_Load_DimSupplier.sql — Shared
+  - usp_Load_DimStore.sql — Tenant-aware
+  - usp_Load_DimCustomer.sql — SCD Type 2 + TenantID
+  - usp_Load_DimEmployee.sql — Tenant-aware
+  - usp_Transform_FactSales.sql — @TenantID param, INSERT hợp lệ + ghi STG_ErrorLog
+  - usp_Transform_FactInventory.sql — @TenantID param
+  - usp_Transform_FactPurchase.sql — @TenantID param
+  - usp_Refresh_DM_SalesSummary.sql — @TenantID, DELETE + INSERT
+  - usp_Refresh_DM_InventoryAlert.sql — @TenantID
+  - usp_Refresh_DM_CustomerRFM.sql — @TenantID (Recency, Frequency, Monetary scoring)
+  - usp_Refresh_DM_EmployeePerformance.sql — @TenantID
+  - usp_Refresh_DM_PurchaseSummary.sql — @TenantID
+  - usp_Update_Watermark.sql — @SourceName, @TenantID, @Status (RUNNING/SUCCESS/FAILED)
+
+  ---
+  🔷 PHASE 8: SQL Views & Indexes (sql/views/)
+
+  - v_FactSales_ByTenant.sql — SESSION_CONTEXT filter
+  - v_DM_SalesSummary_ByTenant.sql
+  - Indexes: IX_FactSales_TenantID_DateKey, IX_FactInventory_TenantID_DateKey, IX_DimCustomer_TenantID_IsCurrent,
+  IX_DM_SalesSummary_TenantID_DateKey
+
+  ---
+  🔷 PHASE 9: ETL — Extract Module (etl/extract/)
+
+  - __init__.py
+  - db_utils.py — get_db_connection(), execute_sp(), load_dataframe_to_staging()
+  - extract_sales.py — get_last_watermark(), extract_sales_from_excel(), extract_sales_from_csv()
+  - extract_inventory.py — extract_inventory_from_excel()
+  - extract_product.py — extract_products_from_csv()
+  - extract_customer.py — extract_customers_from_excel()
+  - extract_purchase.py — extract_purchases_from_excel()
+
+  ---
+  🔷 PHASE 10: ETL — Transform Module (etl/transform/)
+
+  - __init__.py
+  - transform_sales.py — Full logic: chuẩn hóa datetime/int/float, trim/UPPER strings, xử lý NULL, loại trùng (MaHoaDon+MaSP), filter
+  qty<=0/price<0, tính GrossSales/NetSales
+  - transform_inventory.py — Tương tự, tính ClosingQty, StockValue
+  - transform_product.py — Chuẩn hóa sản phẩm, tính UnitCostPrice, UnitListPrice
+  - transform_customer.py — Chuẩn hóa KH, xử lý loyalty point, ngày đăng ký
+  - transform_employee.py — Chuẩn hóa nhân viên, tính tuổi, thâm niên
+  - transform_purchase.py — Chuẩn hóa nhập hàng, tính TotalCost
+  - base_transform.py — Shared logic: clean_string(), parse_date(), handle_null()
+
+  ---
+  🔷 PHASE 11: ETL — Orchestrator + Monitoring (etl/orchestrator/)
+
+  - __init__.py
+  - config.py — Load env, CONN_STR, JWT_SECRET, paths
+  - etl_pipeline.py — run_etl_for_tenant(tenant_id, file_paths) — Extract → Transform → Load Staging → Call SPs → Update Watermark →
+  Send Alert
+  - orchestrator.py — run_all_tenants() — Đọc Tenants table, vòng lặp qua tenant active
+  - scheduler.py — APScheduler: Daily 02:00 AM, hoặc manual trigger
+  - __main__.py — Entry point: python -m etl.orchestrator
+  - etl/utils/monitoring.py — send_email_alert(), send_slack_alert(), alert()
+  - etl/utils/logging_config.py — Structured logging với tenant context
+
+  ---
+  🔷 PHASE 12: Auth Gateway — FastAPI (api/)
+
+  - __init__.py
+  - main.py — FastAPI app initialization, CORS, lifespan
+  - config.py — Load .env
+  - database.py — SQL Server connection pool
+  - auth.py — POST /login (bcrypt verify → JWT), GET /dashboard-token (Superset guest token), GET /me (decode JWT → user info), POST
+  /logout
+  - models.py — Pydantic: LoginReq, LoginRes, TokenPayload, UserInfo, DashboardTokenRes
+  - middleware.py — JWT verification dependency, tenant context injection
+  - routes/tenants.py — GET /tenants (admin), GET /tenants/me
+  - routes/etl.py — POST /etl/trigger (admin only), GET /etl/status
+  - requirements-api.txt
+
+  ---
+  🔷 PHASE 13: Superset Config & User Scripts (superset/)
+
+  - docker-compose-superset.yml — superset + redis + db (postgres)
+  - superset_config.py — AUTH_USER_REGISTRATION=False, PUBLIC_ROLE_LIKE=None, CSRF enabled, 8h session, feature flags
+  - scripts/create_users.py — Batch tạo Superset users từ AppUsers (admin gọi qua API)
+  - scripts/create_roles_rls.py — Auto tạo RLS roles + rules per tenant
+  - scripts/seed_dashboards.py — Script tạo 5 dashboard scaffolds
+
+  ---
+  🔷 PHASE 14: Docker Orchestration + Sample Data
+
+  - Root docker-compose.yml — sqlserver-2019, superset, api, etl-scheduler, minio (local file storage backup)
+  - data/STORE_HN/ — Tạo Excel mẫu (BaoCaoDoanhThu.xlsx, QuanLyKho.xlsx) với ~500 dòng dữ liệu test
+  - data/STORE_HCM/ — Tương tự, ~500 dòng
+  - sql/seed_data/ — Script insert DimDate, seed Tenants, demo AppUsers (admin + 2 viewer)
+  - Makefile — make up, make down, make etl-run, make test
+
+  ---
+  ⏳ THỨ TỰ THỰC HIỆN
+
+  PHASE 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14
+
+  Mỗi Phase đều có verify commands (bash/SQL query) để tao chạy thử trước khi sang Phase mới.
