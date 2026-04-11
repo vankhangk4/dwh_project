@@ -64,7 +64,7 @@ from api.models import (
     TokenPayload,
     UserInfo,
 )
-from api.routes import etl_router, tenants_router
+from api.routes import etl_router, superset_router, tenants_router
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -207,6 +207,7 @@ app.middleware("http")(log_requests)
 
 app.include_router(tenants_router)
 app.include_router(etl_router)
+app.include_router(superset_router)
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +304,13 @@ async def root() -> dict[str, Any]:
             "trigger": "/etl/trigger",
             "trigger_sync": "/etl/trigger/sync",
             "status": "/etl/status",
+        },
+        "superset": {
+            "health": "/superset/health",
+            "users_sync": "/superset/users/sync",
+            "roles_init": "/superset/roles/init",
+            "dashboards_seed": "/superset/dashboards/seed",
+            "provision_tenant": "/superset/provision/tenant",
         },
     }
 

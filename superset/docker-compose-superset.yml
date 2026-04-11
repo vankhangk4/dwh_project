@@ -1,0 +1,222 @@
+# ============================================================================
+# superset/docker-compose-superset.yml
+# Phase 13: Docker Compose for Apache Superset standalone
+#
+# Services:
+#   - superset       : Apache Superset web application
+#   - redis          : Cache backend for Superset
+#   - superset_db   : PostgreSQL database for Superset metadata
+#
+# Usage:
+#   docker-compose -f superset/docker-compose-superset.yml up -d
+#   docker-compose -f superset/docker-compose-superset.yml down -v
+#
+# Notes:
+#   - Superset init is handled via docker-compose environment variables.
+#   - For production, use a dedicated PostgreSQL instance instead of the
+#     containerized one, and mount superset_config.py as a volume.
+#   - Default admin credentials are set via INIT_ADMIN_* variables.
+#
+# Author: Nguyen Van Khang
+# ============================================================================
+
+version: "3.8"
+
+services:
+  # --------------------------------------------------------------------------
+  # PostgreSQL — Superset metadata database
+  # --------------------------------------------------------------------------
+  superset_db:
+    image: postgres:15-alpine
+    container_name: superset_db
+    environment:
+      - POSTGRES_DB=superset
+      - POSTGRES_USER=superset
+      - POSTGRES_PASSWORD=SupersetDBPass123!
+    ports:
+      - "5432:5432"
+    volumes:
+      - superset_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U superset -d superset"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - superset_network
+
+  # --------------------------------------------------------------------------
+  # Redis — Cache backend
+  # --------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: superset_redis
+    ports:
+      - "6379:6379"
+    command: redis-server --requirepass SupersetRedisPass123!
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - superset_network
+
+  # --------------------------------------------------------------------------
+  # Apache Superset
+  # --------------------------------------------------------------------------
+  superset:
+    image: apache/superset:3.1.1
+    container_name: superset_app
+    environment:
+      # Database connection
+      - DATABASE_CONNECTION_OPTIONS_STRINGIFIED=true
+      - SQLALCHEMY_DATABASE_URI=postgresql+psycopg2://superset:SupersetDBPass123!@superset_db:5432/superset
+      - SQLALCHEMY_DISPLAY_CHARSET=utf8
+      # Redis cache
+      - REDIS_CACHE_CONFIG_STRINGIFIED=true
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=SupersetRedisPass123!
+      - REDIS_DB_CODES=0
+      - CACHE_CONFIG={"CACHE_TYPE": "RedisCache", "CACHE_KEY_PREFIX": "superset_", "CACHE_REDIS_HOST": "redis", "CACHE_REDIS_PORT": 6379, "CACHE_REDIS_PASSWORD": "SupersetRedisPass123!", "CACHE_REDIS_DB": 0}
+      - DATA_CACHE_CONFIG={"CACHE_TYPE": "RedisCache", "CACHE_KEY_PREFIX": "superset_data_", "CACHE_REDIS_HOST": "redis", "CACHE_REDIS_PORT": 6379, "CACHE_REDIS_PASSWORD": "SupersetRedisPass123!", "CACHE_REDIS_DB": 1}
+      # Superset app settings
+      - SUPERSET_CONFIG_PATH=/app/superset/superset_config.py
+      - SUPERSET_ENV=development
+      - LOG_LEVEL=INFO
+      - FAB_API_MAX_PAGE_SIZE=100
+      # Security
+      - ENABLE_PROXY_FIX=true
+      # Admin user creation (runs on first startup)
+      - SUPERSET_ADMIN_USER=${SUPERSET_ADMIN_USER:-admin}
+      - SUPERSET_ADMIN_PASSWORD=${SUPERSET_ADMIN_PWD:-admin}
+      - SUPERSET_ADMIN_FIRSTNAME=${SUPERSET_ADMIN_FIRSTNAME:-Admin}
+      - SUPERSET_ADMIN_LASTNAME=${SUPERSET_ADMIN_LASTNAME:-User}
+      - SUPERSET_ADMIN_EMAIL=${SUPERSET_ADMIN_EMAIL:-admin@superset.local}
+      # Feature flags
+      - FEATURE_FLAGS={"ALERT_REPORTS": true, "DASHBOARD_RBAC": true, "ENABLE_TEMPLATE_REMOVAL": true, "ENABLE_EXPLORE_DRAG_DROP": true, "LISTVIEW_DEFAULT_COLUMNS": true}
+      # Mapbox token (optional, set in .env for map charts)
+      - MAPBOX_API_KEY=${MAPBOX_API_KEY:-}
+    ports:
+      - "8088:8088"
+    volumes:
+      # Mount custom superset config
+      - ./superset_config.py:/app/superset/superset_config.py:ro
+      # Mount custom scripts for init
+      - ./scripts:/scripts:ro
+      # Superset home (for uploads, export, etc.)
+      - superset_home:/app/superset/superset_home
+    depends_on:
+      superset_db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8088/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - superset_network
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
+
+  # --------------------------------------------------------------------------
+  # Superset Worker (for async queries and Celery tasks)
+  # --------------------------------------------------------------------------
+  superset_worker:
+    image: apache/superset:3.1.1
+    container_name: superset_worker
+    command: celery --app=superset.tasks.celery_app:app worker --loglevel=info
+    environment:
+      - DATABASE_CONNECTION_OPTIONS_STRINGIFIED=true
+      - SQLALCHEMY_DATABASE_URI=postgresql+psycopg2://superset:SupersetDBPass123!@superset_db:5432/superset
+      - SQLALCHEMY_DISPLAY_CHARSET=utf8
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=SupersetRedisPass123!
+      - REDIS_DB_CODES=0
+      - CACHE_CONFIG={"CACHE_TYPE": "RedisCache", "CACHE_KEY_PREFIX": "superset_", "CACHE_REDIS_HOST": "redis", "CACHE_REDIS_PORT": 6379, "CACHE_REDIS_PASSWORD": "SupersetRedisPass123!", "CACHE_REDIS_DB": 0}
+      - DATA_CACHE_CONFIG={"CACHE_TYPE": "RedisCache", "CACHE_KEY_PREFIX": "superset_data_", "CACHE_REDIS_HOST": "redis", "CACHE_REDIS_PORT": 6379, "CACHE_REDIS_PASSWORD": "SupersetRedisPass123!", "CACHE_REDIS_DB": 1}
+      - SUPERSET_CONFIG_PATH=/app/superset/superset_config.py
+      - SUPERSET_ENV=development
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./superset_config.py:/app/superset/superset_config.py:ro
+      - superset_home:/app/superset/superset_home
+    depends_on:
+      superset_db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - superset_network
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+
+  # --------------------------------------------------------------------------
+  # Superset Beat (Celery scheduler)
+  # --------------------------------------------------------------------------
+  superset_beat:
+    image: apache/superset:3.1.1
+    container_name: superset_beat
+    command: celery --app=superset.tasks.celery_app:app beat --loglevel=info
+    environment:
+      - DATABASE_CONNECTION_OPTIONS_STRINGIFIED=true
+      - SQLALCHEMY_DATABASE_URI=postgresql+psycopg2://superset:SupersetDBPass123!@superset_db:5432/superset
+      - SQLALCHEMY_DISPLAY_CHARSET=utf8
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=SupersetRedisPass123!
+      - CACHE_CONFIG={"CACHE_TYPE": "RedisCache", "CACHE_KEY_PREFIX": "superset_", "CACHE_REDIS_HOST": "redis", "CACHE_REDIS_PORT": 6379, "CACHE_REDIS_PASSWORD": "SupersetRedisPass123!", "CACHE_REDIS_DB": 0}
+      - SUPERSET_CONFIG_PATH=/app/superset/superset_config.py
+    volumes:
+      - ./superset_config.py:/app/superset/superset_config.py:ro
+    depends_on:
+      superset_db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - superset_network
+
+# ============================================================================
+# Networks
+# ============================================================================
+
+networks:
+  superset_network:
+    driver: bridge
+    name: superset_network
+
+# ============================================================================
+# Volumes
+# ============================================================================
+
+volumes:
+  superset_db_data:
+    name: superset_db_data
+  redis_data:
+    name: superset_redis_data
+  superset_home:
+    name: superset_home
